@@ -12,7 +12,7 @@ npm run build
 ## Usage
 
 ```ts
-import { searchDuckDuckGo } from 'duckduckgo-search';
+import { searchDuckDuckGo } from 'ts-duckduckgo-search';
 
 const results = await searchDuckDuckGo('privacy focused search');
 

@@ -1,5 +1,5 @@
 {
-  "name": "duckduckgo-search",
+  "name": "ts-duckduckgo-search",
   "version": "0.1.0",
   "description": "DuckDuckGo search scraper with TypeScript API",
   "main": "dist/index.js",
