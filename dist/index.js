@@ -6,12 +6,28 @@ const SAFE_SEARCH_PARAM = {
     moderate: '0',
     strict: '1',
 };
+/** Maximum number of retries for exponential backoff */
+const MAX_RETRIES = 5;
 export class DuckDuckGoSearchError extends Error {
     constructor(message, cause) {
         super(message);
         this.cause = cause;
         this.name = 'DuckDuckGoSearchError';
     }
+}
+/**
+ * Get the exponential backoff delay.
+ * @param attempt Attempt number
+ * @param baseDelay THe base delay (defaults to 100)
+ * @param maxDelay  The maximum delay (defaults to 120_000)
+ * @returns The exponential backoff delay
+ */
+function getExponentialBackoffDelay(attempt, baseDelay = 100, maxDelay = 120_000) {
+    // Add random jitter between 0 and baseDelay
+    const jitter = Math.random() * baseDelay;
+    // Exponential backoff formula
+    const delay = Math.min(baseDelay * Math.pow(2, attempt) + jitter, maxDelay);
+    return delay;
 }
 /**
  * Performs a DuckDuckGo search by scraping the lite HTML endpoint.
@@ -29,8 +45,17 @@ export async function searchDuckDuckGo(query, options = {}) {
         throw new DuckDuckGoSearchError('maxResults must be greater than 0');
     }
     try {
-        const html = await requestSearchPage(trimmedQuery, options, userAgent);
-        return parseResults(html, maxResults);
+        // loop to get result
+        for (let i = 0; i < MAX_RETRIES; i++) {
+            const html = await requestSearchPage(trimmedQuery, options, userAgent);
+            // verify challenge
+            if (html.includes('challenge-form')) {
+                await new Promise((resolve) => setTimeout(resolve, getExponentialBackoffDelay(i)));
+                continue;
+            }
+            return parseResults(html, maxResults);
+        }
+        throw new DuckDuckGoSearchError('Max attempts exceeded');
     }
     catch (error) {
         throw new DuckDuckGoSearchError('Failed to search DuckDuckGo', error);
