@@ -39,6 +39,10 @@ describe('searchDuckDuckGo', () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       text: async () => htmlFixture,
+      headers: {
+        get: () => null,
+        getSetCookie: () => [],
+      },
     });
 
     globalThis.fetch = fetchMock as unknown as typeof fetch;
@@ -59,5 +63,36 @@ describe('searchDuckDuckGo', () => {
         headers: expect.any(Object),
       }),
     );
+  });
+
+  it('reuses session cookies between sequential searches', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () => htmlFixture,
+        headers: {
+          get: () => null,
+          getSetCookie: () => ['session=123; Path=/; Max-Age=31536000'],
+        },
+      })
+      .mockResolvedValue({
+        ok: true,
+        text: async () => htmlFixture,
+        headers: {
+          get: () => null,
+          getSetCookie: () => [],
+        },
+      });
+
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await searchDuckDuckGo('example');
+    await searchDuckDuckGo('example');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const secondCallHeaders = fetchMock.mock.calls[1][1]?.headers as Record<string, string>;
+
+    expect(secondCallHeaders.cookie).toContain('session=123');
   });
 });
