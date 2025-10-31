@@ -8,6 +8,15 @@ const SAFE_SEARCH_PARAM = {
 };
 /** Maximum number of retries for exponential backoff */
 const MAX_RETRIES = 5;
+/** Minimum gap enforced between two outbound requests */
+const MIN_REQUEST_INTERVAL_MS = 800;
+/** Additional random delay to avoid a perfectly regular cadence */
+const REQUEST_JITTER_MS = 200;
+const sessionCookies = new Map();
+let lastRequestTimestamp = 0;
+function delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
 export class DuckDuckGoSearchError extends Error {
     constructor(message, cause) {
         super(message);
@@ -63,13 +72,22 @@ export async function searchDuckDuckGo(query, options = {}) {
 }
 async function requestSearchPage(query, options, userAgent) {
     const url = buildSearchUrl(query, options);
+    await enforceRequestInterval();
+    const headers = {
+        'user-agent': userAgent,
+        accept: 'text/html,application/xhtml+xml,application/xml;q=0.9',
+        'accept-language': 'en-US,en;q=0.9',
+        referer: 'https://duckduckgo.com/',
+    };
+    const cookieHeader = buildCookieHeader();
+    if (cookieHeader) {
+        headers.cookie = cookieHeader;
+    }
     const response = await fetch(url, {
-        headers: {
-            'user-agent': userAgent,
-            accept: 'text/html,application/xhtml+xml',
-        },
+        headers,
         signal: options.signal,
     });
+    storeResponseCookies(response.headers);
     if (!response.ok) {
         throw new Error(`DuckDuckGo responded with status ${response.status}`);
     }
@@ -111,6 +129,67 @@ function parseResults(html, maxResults) {
         results.push({ title, url, description });
     });
     return results;
+}
+async function enforceRequestInterval() {
+    const now = Date.now();
+    if (lastRequestTimestamp) {
+        const elapsed = now - lastRequestTimestamp;
+        if (elapsed < MIN_REQUEST_INTERVAL_MS) {
+            const jitter = Math.random() * REQUEST_JITTER_MS;
+            await delay(MIN_REQUEST_INTERVAL_MS - elapsed + jitter);
+        }
+    }
+    lastRequestTimestamp = Date.now();
+}
+function storeResponseCookies(headers) {
+    const possibleCookies = (headers.getSetCookie?.() ?? []);
+    if (possibleCookies.length > 0) {
+        updateCookieJar(possibleCookies);
+        return;
+    }
+    const headerValue = headers.get('set-cookie');
+    if (!headerValue) {
+        return;
+    }
+    const cookies = headerValue.split(/,(?=[^;]+=[^;]+)/).map((value) => value.trim());
+    updateCookieJar(cookies);
+}
+function updateCookieJar(cookies) {
+    for (const cookie of cookies) {
+        const [name, value] = parseCookie(cookie) ?? [];
+        if (!name) {
+            continue;
+        }
+        if (!value || value.toLowerCase() === 'deleted') {
+            sessionCookies.delete(name);
+            continue;
+        }
+        sessionCookies.set(name, value);
+    }
+}
+function parseCookie(cookie) {
+    const [nameValue] = cookie.split(';');
+    if (!nameValue?.includes('=')) {
+        return null;
+    }
+    const separatorIndex = nameValue.indexOf('=');
+    if (separatorIndex === -1) {
+        return null;
+    }
+    const name = nameValue.slice(0, separatorIndex).trim();
+    const value = nameValue.slice(separatorIndex + 1).trim();
+    if (!name) {
+        return null;
+    }
+    return [name, value];
+}
+function buildCookieHeader() {
+    if (sessionCookies.size === 0) {
+        return undefined;
+    }
+    return Array.from(sessionCookies.entries())
+        .map(([name, value]) => `${name}=${value}`)
+        .join('; ');
 }
 function extractUrl(rawHref) {
     try {
